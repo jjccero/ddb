@@ -5,10 +5,10 @@ import edu.dlut.demo.dao.UserDao;
 import edu.dlut.demo.model.PasswordVO;
 import edu.dlut.demo.model.User;
 import edu.dlut.demo.model.UserVO;
-import edu.dlut.demo.util.RedisUtil;
+import edu.dlut.demo.util.ShardUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Repository;
-import redis.clients.jedis.Jedis;
+import redis.clients.jedis.ShardedJedis;
 
 @Slf4j
 @Repository
@@ -21,7 +21,7 @@ public class UserDaoImpl implements UserDao {
         return "username:" + username;
     }
 
-    private User getUser(String userKey, Jedis jedis) {
+    private User getUser(String userKey, ShardedJedis jedis) {
         if (userKey != null) {
             String userString = jedis.get(userKey);
             if (userString != null) {
@@ -34,7 +34,7 @@ public class UserDaoImpl implements UserDao {
     @Override
     public boolean insertUser(User user) {
         boolean res = false;
-        try (Jedis jedis = RedisUtil.getJedis()) {
+        try (ShardedJedis jedis = ShardUtil.getJedis()) {
             String usernameKey = getUsernameKey(user.getUsername());
             if (jedis.setnx(usernameKey, "placeholder") == 1L) {
                 Long userId = jedis.incr("currentUserId");
@@ -53,7 +53,7 @@ public class UserDaoImpl implements UserDao {
     @Override
     public boolean updateUser(User user) {
         boolean res = false;
-        try (Jedis jedis = RedisUtil.getJedis()) {
+        try (ShardedJedis jedis = ShardUtil.getJedis()) {
             String userKey = "user:" + user.getUserId();
             User oldUser = getUser(userKey, jedis);
             if (oldUser != null) {
@@ -71,7 +71,7 @@ public class UserDaoImpl implements UserDao {
     @Override
     public UserVO selectUserVOByUserId(Long userId) {
         UserVO userVO = new UserVO();
-        try (Jedis jedis = RedisUtil.getJedis()) {
+        try (ShardedJedis jedis = ShardUtil.getJedis()) {
             String userKey = getUserEey(userId);
             User user = getUser(userKey, jedis);
             if (user != null) {
@@ -87,7 +87,7 @@ public class UserDaoImpl implements UserDao {
 
     @Override
     public User selectUserByUsername(String username) {
-        try (Jedis jedis = RedisUtil.getJedis()) {
+        try (ShardedJedis jedis = ShardUtil.getJedis()) {
             String usernameKey = getUsernameKey(username);
             String userIdString = jedis.get(usernameKey);
             if (userIdString != null) {
@@ -104,7 +104,7 @@ public class UserDaoImpl implements UserDao {
     @Override
     public String selectPasswordByUserId(Long userId) {
         String password = null;
-        try (Jedis jedis = RedisUtil.getJedis()) {
+        try (ShardedJedis jedis = ShardUtil.getJedis()) {
             String userKey = getUserEey(userId);
             User user = getUser(userKey, jedis);
             if (user != null) {
@@ -119,7 +119,7 @@ public class UserDaoImpl implements UserDao {
     @Override
     public boolean updatePassword(PasswordVO passwordVO) {
         boolean res = false;
-        try (Jedis jedis = RedisUtil.getJedis()) {
+        try (ShardedJedis jedis = ShardUtil.getJedis()) {
             String userKey = getUserEey(passwordVO.getUserId());
             User oldUser = JSON.parseObject(jedis.get(userKey), User.class);
             if (oldUser != null) {

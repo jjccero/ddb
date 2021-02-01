@@ -3,11 +3,10 @@ package edu.dlut.demo.dao.impl;
 import com.alibaba.fastjson.JSON;
 import edu.dlut.demo.dao.JourneyDao;
 import edu.dlut.demo.model.Journey;
-import edu.dlut.demo.util.RedisUtil;
+import edu.dlut.demo.util.ShardUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Repository;
-import redis.clients.jedis.Jedis;
-import redis.clients.jedis.Transaction;
+import redis.clients.jedis.ShardedJedis;
 
 import java.sql.Timestamp;
 import java.text.SimpleDateFormat;
@@ -46,7 +45,7 @@ public class JourneyDaoImpl implements JourneyDao {
         return userId != null ? "userJourneys:" + userId : null;
     }
 
-    private Journey getJourney(String journeyKey, Jedis jedis) {
+    private Journey getJourney(String journeyKey, ShardedJedis jedis) {
         if (journeyKey != null) {
             String journeyString = jedis.get(journeyKey);
             if (journeyString != null) {
@@ -58,18 +57,16 @@ public class JourneyDaoImpl implements JourneyDao {
 
     @Override
     public long insertJourney(Journey journey) {
-        try (Jedis jedis = RedisUtil.getJedis()) {
+        try (ShardedJedis jedis = ShardUtil.getJedis()) {
             Long journeyId = jedis.incr("currentJourneyId");
             if (journeyId > 0L) {
                 journey.setJourneyId(journeyId);
                 String journeyKey = getJourneyKey(journeyId);
                 String journeyIdString = journeyId.toString();
-                Transaction transaction = jedis.multi();
-                transaction.set(journeyKey, JSON.toJSONString(journey));
-                transaction.sadd(journeySetKey, journeyIdString);
-                transaction.sadd(getUserJourneysKey(journey.getUserId()), journeyIdString);
-                sadd(journey, journeyIdString, transaction);
-                transaction.exec();
+                jedis.set(journeyKey, JSON.toJSONString(journey));
+                jedis.sadd(journeySetKey, journeyIdString);
+                jedis.sadd(getUserJourneysKey(journey.getUserId()), journeyIdString);
+                sadd(journey, journeyIdString, jedis);
                 return journeyId;
             }
         } catch (Exception e) {
@@ -83,19 +80,17 @@ public class JourneyDaoImpl implements JourneyDao {
         boolean res = false;
         Long journeyId = journey.getJourneyId();
         String journeyKey = getJourneyKey(journeyId);
-        try (Jedis jedis = RedisUtil.getJedis()) {
+        try (ShardedJedis jedis = ShardUtil.getJedis()) {
             Journey oldJourney = getJourney(journeyKey, jedis);
             if (oldJourney != null) {
                 String journeyIdString = journeyId.toString();
-                Transaction transaction = jedis.multi();
-                srem(oldJourney, journeyIdString, transaction);
+                srem(oldJourney, journeyIdString, jedis);
                 oldJourney.setFromCity(journey.getFromCity());
                 oldJourney.setToCity(journey.getToCity());
                 oldJourney.setDepartDate(journey.getDepartDate());
                 oldJourney.setType(journey.getType());
-                sadd(oldJourney, journeyIdString, transaction);
-                transaction.set(journeyKey, JSON.toJSONString(oldJourney));
-                transaction.exec();
+                sadd(oldJourney, journeyIdString, jedis);
+                jedis.set(journeyKey, JSON.toJSONString(oldJourney));
                 res = true;
             }
         } catch (Exception e) {
@@ -109,16 +104,14 @@ public class JourneyDaoImpl implements JourneyDao {
         boolean res = false;
         Long journeyId = journey.getJourneyId();
         String journeyKey = getJourneyKey(journeyId);
-        try (Jedis jedis = RedisUtil.getJedis()) {
+        try (ShardedJedis jedis = ShardUtil.getJedis()) {
             journey = getJourney(journeyKey, jedis);
             if (journey != null) {
                 String journeyIdString = journeyId.toString();
-                Transaction transaction = jedis.multi();
-                transaction.srem(journeySetKey, journeyIdString);
-                transaction.srem(getUserJourneysKey(journey.getUserId()), journeyIdString);
-                srem(journey, journeyIdString, transaction);
-                transaction.del(journeyKey, JSON.toJSONString(journey));
-                transaction.exec();
+                jedis.srem(journeySetKey, journeyIdString);
+                jedis.srem(getUserJourneysKey(journey.getUserId()), journeyIdString);
+                srem(journey, journeyIdString, jedis);
+                jedis.del(journeyKey);
                 res = true;
             }
         } catch (Exception e) {
@@ -131,7 +124,7 @@ public class JourneyDaoImpl implements JourneyDao {
     public List<Journey> queryJourneysByUserId(Long userId) {
         List<Journey> journeys = null;
         String userJourneysKey = getUserJourneysKey(userId);
-        try (Jedis jedis = RedisUtil.getJedis()) {
+        try (ShardedJedis jedis = ShardUtil.getJedis()) {
             Set<String> journeyIdStrings = jedis.smembers(userJourneysKey);
             journeys = new ArrayList<>(journeyIdStrings.size());
             for (String journeyIdString : journeyIdStrings) {
@@ -166,8 +159,17 @@ public class JourneyDaoImpl implements JourneyDao {
         if (type != null) keys.add(getTypeKey(type));
         if (departDate != null) keys.add(getDateKey(departDate));
         if (keys.isEmpty()) keys.add(journeySetKey);
-        try (Jedis jedis = RedisUtil.getJedis()) {
-            Set<String> journeyIdStrings = jedis.sinter(keys.toArray(new String[0]));
+        try (ShardedJedis jedis = ShardUtil.getJedis()) {
+            Set<String> journeyIdStrings = null;
+            for (String key : keys) {
+                Set<String> smembers = jedis.smembers(key);
+                if (journeyIdStrings == null) {
+                    journeyIdStrings = smembers;
+                } else {
+                    journeyIdStrings.retainAll(jedis.smembers(key));
+                }
+            }
+            assert journeyIdStrings != null;
             journeys = new ArrayList<>(journeyIdStrings.size());
             for (String journeyIdString : journeyIdStrings) {
                 Long journeyId = Long.parseLong(journeyIdString);
@@ -182,17 +184,17 @@ public class JourneyDaoImpl implements JourneyDao {
         return journeys;
     }
 
-    private void srem(Journey journey, String journeyIdString, Transaction transaction) {
-        transaction.srem(getFromKey(journey.getFromCity()), journeyIdString);
-        transaction.srem(getToKey(journey.getToCity()), journeyIdString);
-        transaction.srem(getDateKey(journey.getDepartDate()), journeyIdString);
-        transaction.srem(getTypeKey(journey.getType()), journeyIdString);
+    private void srem(Journey journey, String journeyIdString, ShardedJedis jedis) {
+        jedis.srem(getFromKey(journey.getFromCity()), journeyIdString);
+        jedis.srem(getToKey(journey.getToCity()), journeyIdString);
+        jedis.srem(getDateKey(journey.getDepartDate()), journeyIdString);
+        jedis.srem(getTypeKey(journey.getType()), journeyIdString);
     }
 
-    private void sadd(Journey journey, String journeyIdString, Transaction transaction) {
-        transaction.sadd(getFromKey(journey.getFromCity()), journeyIdString);
-        transaction.sadd(getToKey(journey.getToCity()), journeyIdString);
-        transaction.sadd(getDateKey(journey.getDepartDate()), journeyIdString);
-        transaction.sadd(getTypeKey(journey.getType()), journeyIdString);
+    private void sadd(Journey journey, String journeyIdString, ShardedJedis jedis) {
+        jedis.sadd(getFromKey(journey.getFromCity()), journeyIdString);
+        jedis.sadd(getToKey(journey.getToCity()), journeyIdString);
+        jedis.sadd(getDateKey(journey.getDepartDate()), journeyIdString);
+        jedis.sadd(getTypeKey(journey.getType()), journeyIdString);
     }
 }

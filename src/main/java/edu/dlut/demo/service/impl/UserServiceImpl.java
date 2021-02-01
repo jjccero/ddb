@@ -8,12 +8,14 @@ import edu.dlut.demo.model.User;
 import edu.dlut.demo.model.UserVO;
 import edu.dlut.demo.service.UserService;
 import edu.dlut.demo.util.RedisUtil;
+import edu.dlut.demo.util.ShardUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import redis.clients.jedis.Jedis;
+import redis.clients.jedis.ShardedJedis;
 
 import java.util.UUID;
 
@@ -32,7 +34,7 @@ public class UserServiceImpl implements UserService {
                 user.setPassword(null);
                 String sessionId = UUID.randomUUID().toString();
                 user.setSessionId(sessionId);
-                try (Jedis jedis = RedisUtil.getJedis()) {
+                try (ShardedJedis jedis = ShardUtil.getJedis()) {
                     jedis.set(sessionId, user.getUserId().toString(), RedisUtil.EX_DAY);
                     return user;
                 } catch (Exception e) {
@@ -46,7 +48,7 @@ public class UserServiceImpl implements UserService {
     @Override
     public boolean logout(String sessionId) {
         boolean res = false;
-        try (Jedis jedis = RedisUtil.getJedis()) {
+        try (ShardedJedis jedis = ShardUtil.getJedis()) {
             res = jedis.del(sessionId) == 1L;
         } catch (Exception e) {
             log.error(e.toString());
@@ -72,7 +74,7 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public Long getUserId(String sessionId) {
-        try (Jedis jedis = RedisUtil.getJedis()) {
+        try (ShardedJedis jedis = ShardUtil.getJedis()) {
             String userIdString = jedis.get(sessionId);
             if (userIdString != null)
                 return Long.parseLong(userIdString);
