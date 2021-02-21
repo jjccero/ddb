@@ -20,17 +20,7 @@ public class ShardUtil {
         infos.add(new JedisShardInfo(host, 6379));
         infos.add(new JedisShardInfo(host, 6380));
         infos.add(new JedisShardInfo(host, 6381));
-        pool = new ShardedJedisPool(config, infos, new Hashing() {
-            @Override
-            public long hash(String s) {
-                return 0;
-            }
-
-            @Override
-            public long hash(byte[] bytes) {
-                return 0;
-            }
-        });
+        pool = new ShardedJedisPool(config, infos);
     }
 
     public static ShardedJedis getJedis() {

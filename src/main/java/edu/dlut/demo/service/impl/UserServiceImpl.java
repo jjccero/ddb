@@ -25,7 +25,9 @@ public class UserServiceImpl implements UserService {
     @Autowired
     UserDao userDao;
     private static final PasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
-
+    private String getSessionKey(String sessionId){
+        return "session:"+sessionId;
+    }
     @Override
     public User login(LoginVO loginVO) throws UserException {
         if (loginVO != null) {
@@ -35,7 +37,7 @@ public class UserServiceImpl implements UserService {
                 String sessionId = UUID.randomUUID().toString();
                 user.setSessionId(sessionId);
                 try (ShardedJedis jedis = ShardUtil.getJedis()) {
-                    jedis.set(sessionId, user.getUserId().toString(), RedisUtil.EX_DAY);
+                    jedis.set(getSessionKey(sessionId), user.getUserId().toString(), RedisUtil.EX_DAY);
                     return user;
                 } catch (Exception e) {
                     log.error(e.toString());
@@ -49,7 +51,7 @@ public class UserServiceImpl implements UserService {
     public boolean logout(String sessionId) {
         boolean res = false;
         try (ShardedJedis jedis = ShardUtil.getJedis()) {
-            res = jedis.del(sessionId) == 1L;
+            res = jedis.del(getSessionKey(sessionId)) == 1L;
         } catch (Exception e) {
             log.error(e.toString());
         }
@@ -75,7 +77,7 @@ public class UserServiceImpl implements UserService {
     @Override
     public Long getUserId(String sessionId) {
         try (ShardedJedis jedis = ShardUtil.getJedis()) {
-            String userIdString = jedis.get(sessionId);
+            String userIdString = jedis.get(getSessionKey(sessionId));
             if (userIdString != null)
                 return Long.parseLong(userIdString);
         } catch (Exception e) {
